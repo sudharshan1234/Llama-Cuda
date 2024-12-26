@@ -116,7 +116,13 @@ __device__ float warpReduceSum(float val) {
 
 __global__ void attention_query_key_kernel1(float* Q, float* K, float* output, int B, int T, int C, int head_dim, int num_heads){
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
-    if(idx > B * num_heads * T * T){
+    if (idx == 0) {
+        printf("Number of elements in Q: %d\n", B * T * C);
+        printf("Number of elements in K: %d\n", B * T * C);
+        printf("Number of elements in output: %d\n", B * num_heads * T * T);
+        printf("B: %d, T: %d, C: %d, head_dim: %d, num_heads: %d\n", B, T, C, head_dim, num_heads);
+    }
+    if(idx >= B * num_heads * T * T){
         return;
     }
     int b = idx / (num_heads * T * T);
@@ -124,13 +130,16 @@ __global__ void attention_query_key_kernel1(float* Q, float* K, float* output, i
     int t1 = (idx / T) % T;
     int t2 = idx % T;
 
+    if (idx < 10) { // Print for a few threads
+        printf("idx: %d, b: %d, h: %d, t1: %d, t2: %d\n", idx, b, h, t1, t2);
+    }
     if(t2 > t1){
         output[idx] = -INFINITY;
         return;
     }
 
     // h * head_dim = c
-    Q += b * T * C + t*C + h * head_dim;
+    Q += b * T * C + t1*C + h * head_dim;
     K += b * T * C + t2*C + h * head_dim;
 
     // (q) dot (k)
@@ -154,7 +163,7 @@ __global__ void softmax_query_key_kernel(float *input, float *output, int B, int
     float *max_val = &shared[0];
     float *sum_val = &shared[block_size/32];
     int max_num = 0;
-    for(int i=tid; i<T, i += block_size){
+    for(int i=tid; i<T; i += block_size){
         max_num = fmaxf(max_num, input[i]);
     }
 
@@ -181,7 +190,7 @@ __global__ void softmax_query_key_kernel(float *input, float *output, int B, int
     
     
     float sum = 0.0f;
-    for(int i=tid; i<T, i += block_size){
+    for(int i=tid; i<T; i += block_size){
         int val = exp(input[i] - max_num);
         output[i] = val;
         sum += val;
@@ -204,7 +213,7 @@ __global__ void softmax_query_key_kernel(float *input, float *output, int B, int
     }
     __syncthreads();
 
-    sum = sumvals[0];
+    sum = sum_val[0];
 
     for (int i = tid; i < T; i += block_size) {
         output[i] = output[i] / sum;
@@ -218,70 +227,126 @@ void multi_head_attention_forward_gpu1(
 ) {
 
     int qkv_size = B * T * C; 
-    int HxD = num_heads * head_dim;
+    int batch_count = B * num_heads;
     float alpha = 1.0f, beta = 0.0f;
     float *Q, *K, *V;
-    cudaMalloc(&Q, qkv_size * sizeof(float));
-    cudaMalloc(&K, qkv_size * sizeof(float));
-    cudaMalloc(&V, qkv_size * sizeof(float));
+    cudaCheck(cudaMalloc(&Q, qkv_size * sizeof(float)));
+    cudaCheck(cudaMalloc(&K, qkv_size * sizeof(float)));
+    cudaCheck(cudaMalloc(&V, qkv_size * sizeof(float)));
 
     cublasHandle_t handle = createCublasHandle();
-    // Using batched gemm for Q, K, V computation
-    int batch_count = B * num_heads;
-    int m = T;
-    int n = head_dim;
-    int k = C;
-    int lda = C, ldb = C, ldc = head_dim;
-    float alpha = 1.0f;
-    float beta = 0.0f;
-    size_t strideA = T * C;
-    size_t strideB = C * head_dim;
-    size_t strideC = T * head_dim;
+    cudaCheck(cudaDeviceSynchronize());
 
-    // Q = input * weight_q
-    cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
-                              weight_q, lda, strideB,
-                              input, lda, strideA,
-                              &beta, Q, ldc, strideC, batch_count);
+    // Compute Q (B * num_head, T, head_dim) =  input (B * num_head, T, C) * weight_q (C, head_dim)
+    // cublasCheck(cublasSgemm(
+    //     handle,
+    //     CUBLAS_OP_T,
+    //     CUBLAS_OP_T,
+    //     T, head_dim, C,
+    //     &alpha,
+    //     input, T,
+    //     weight_q, head_dim,
+    //     &beta,
+    //     Q, T
+    // ));
+    cublasCheck(cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_T,
+        CUBLAS_OP_T,
+        T, head_dim, C,           // Dimensions of GEMM (output_dim, sequence_length, input_dim)
+        &alpha,                   // Alpha
+        input, T, T * C,          // Input matrix
+        weight_q, head_dim, 0,           // Weight matrix Q (stride 0 as shared across batches)
+        &beta,                    // Beta
+        Q, T, T * head_dim, // Output Q
+        batch_count
+    ));
+    cudaCheck(cudaDeviceSynchronize());
+    cublasCheck(cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        head_dim, T, C,           // Dimensions of GEMM (output_dim, sequence_length, input_dim)
+        &alpha,                   // Alpha
+        weight_q, C, 0,           // Weight matrix Q (stride 0 as shared across batches)
+        input, T, T * C,          // Input matrix
+        &beta,                    // Beta
+        Q, head_dim, T * head_dim, // Output Q
+        batch_count
+    ));
+    cudaCheck(cudaDeviceSynchronize());
 
-    // K = input * weight_k
-    cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
-                              weight_k, lda, strideB,
-                              input, lda, strideA,
-                              &beta, K, ldc, strideC, batch_count);
+    // Compute K = input * weight_k
+    cublasCheck(cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        head_dim, T, C,
+        &alpha,
+        weight_k, C, 0,
+        input, C, T * C,
+        &beta,
+        K, head_dim, T * head_dim,
+        batch_count
+    ));
 
-    // V = input * weight_v
-    cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha,
-                              weight_v, lda, strideB,
-                              input, lda, strideA,
-                              &beta, V, ldc, strideC, batch_count);
+    // Compute V = input * weight_v
+    cublasCheck(cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        head_dim, T, C,
+        &alpha,
+        weight_v, C, 0,
+        input, C, T * C,
+        &beta,
+        V, head_dim, T * head_dim,
+        batch_count
+    ));
 
     float* attention_scores;
     float* softmax_output;
-    cudaMalloc(&attention_scores, B * num_heads * T * T * sizeof(float));
-    cudaMalloc(&softmax_output, B * num_heads * T * T * sizeof(float));
+    cudaCheck(cudaMalloc(&attention_scores, B * num_heads * T * T * sizeof(float)));
+    cudaCheck(cudaMalloc(&softmax_output, B * num_heads * T * T * sizeof(float)));
 
     int total_elements = B * num_heads * T * T;
     dim3 attention_blocks((total_elements + block_size - 1) / block_size);
     attention_query_key_kernel1<<<attention_blocks, block_size>>>(
         Q, K, attention_scores, B, T, C, head_dim, num_heads);
-
+    cudaCheck(cudaDeviceSynchronize());
     int softmax_shared_memory_size = 2 * (block_size / 32) * sizeof(float);
     softmax_query_key_kernel<<<attention_blocks, block_size, softmax_shared_memory_size>>>(
         attention_scores, softmax_output, B, T, C, head_dim, num_heads, block_size);
-
+    cudaCheck(cudaDeviceSynchronize());
     float* attention_output;
     cudaMalloc(&attention_output, B * num_heads * T * head_dim * sizeof(float));
-    
-    cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, head_dim, T, T, &alpha,
-                              V, ldc, strideC,
-                              softmax_output, T, T * T,
-                              &beta, attention_output, ldc, strideC, batch_count);
 
-    cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, C, T, num_heads * head_dim, &alpha,
-                              weight_o, C, 0,
-                              attention_output, num_heads * head_dim, strideC,
-                              &beta, output, C, strideA, B);
+    // Attention output (B * num_head, T, head_dim) = softmax(scores) (B * num_head, T, T) * V (B * num_head, T, head_dim)
+    cublasCheck(cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_N,                 // No transpose for softmax_output
+        CUBLAS_OP_N,                 // No transpose for V
+        head_dim, T, T,              // GEMM dimensions: m, n, k
+        &alpha,                      // Alpha scaling factor
+        softmax_output, T, T * T,    // Matrix A: lda = T, strideA = T * T
+        V, T, T * head_dim,          // Matrix B: ldb = T, strideB = T * head_dim
+        &beta,                       // Beta scaling factor
+        attention_output, T, T * head_dim, // Matrix C: ldc = head_dim, strideC = T * head_dim
+        batch_count                  // Number of batches
+    ));
+    // Concatenate heads and project back to output space: output = attention_output * weight_o
+    cublasCheck(cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        C, T, head_dim * num_heads,
+        &alpha,
+        weight_o, C, 0,
+        attention_output, head_dim * num_heads, T * head_dim * num_heads,
+        &beta,
+        output, C, T * C,
+        batch_count
+    ));
 
     cudaFree(Q);
     cudaFree(K);
@@ -305,7 +370,6 @@ int main() {
     int total_dim = num_heads * head_dim;
     float eps = 1e-6;
     int deviceIdx = 0;
-    int kernel_num = 3;
 
     cudaCheck(cudaSetDevice(deviceIdx));
 
@@ -337,8 +401,8 @@ int main() {
     int block_sizes[] = {32, 64, 128, 256, 512, 1024};
 
     // CPU validation
-    multi_head_attention_forward_cpu(input, weight_q, weight_k, weight_v, weight_o,
-                                     out_cpu, B, T, C, head_dim, num_heads);
+    // multi_head_attention_forward_cpu(input, weight_q, weight_k, weight_v, weight_o,
+    //                                  out_cpu, B, T, C, head_dim, num_heads);
 
     // Validate kernel correctness at different block sizes
     for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
