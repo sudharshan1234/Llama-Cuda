@@ -294,27 +294,96 @@ void multi_head_attention_forward_gpu1(
 
 }
 
-int main(){
-    // inputs -> B, T, C
-    // Wq -> B, C, (H X D)
-    // Wk -> B, C, (H X D)
-    // Wv -> B, C, (H X D)
-    // Q, K, V -> B, H, T, D
-    // att -> B, H, T, T
+int main() {
     srand(0);
 
     int B = 8;
     int T = 1024;
     int C = 768;
+    int head_dim = 64;
+    int num_heads = 12;
     int total_dim = num_heads * head_dim;
-    // Allocate memory for Q, K, V, and attention matrices
+    float eps = 1e-6;
     int deviceIdx = 0;
     int kernel_num = 3;
+
     cudaCheck(cudaSetDevice(deviceIdx));
-    // create host memory of random numbers
-    float *input = (float*)malloc(B * T * C * sizeof(float));
-    input = make_random_float(B * T * C);
-    float *out_gpu = (float*)malloc(B * T * C * sizeof(float));
-    destroyCublasHandle(handle);
-    
+
+    // Allocate host memory
+    float* input = make_random_float(B * T * C);
+    float* weight_q = make_random_float(C * total_dim);
+    float* weight_k = make_random_float(C * total_dim);
+    float* weight_v = make_random_float(C * total_dim);
+    float* weight_o = make_random_float(total_dim * C);
+    float* out_cpu = (float*)malloc(B * T * C * sizeof(float));
+    float* out_gpu = (float*)malloc(B * T * C * sizeof(float));
+
+    // Allocate GPU memory
+    float *d_input, *d_weight_q, *d_weight_k, *d_weight_v, *d_weight_o, *d_out;
+    cudaCheck(cudaMalloc(&d_input, B * T * C * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_weight_q, C * total_dim * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_weight_k, C * total_dim * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_weight_v, C * total_dim * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_weight_o, total_dim * C * sizeof(float)));
+    cudaCheck(cudaMalloc(&d_out, B * T * C * sizeof(float)));
+
+    // Copy data to GPU
+    cudaCheck(cudaMemcpy(d_input, input, B * T * C * sizeof(float), cudaMemcpyHostToDevice));
+    cudaCheck(cudaMemcpy(d_weight_q, weight_q, C * total_dim * sizeof(float), cudaMemcpyHostToDevice));
+    cudaCheck(cudaMemcpy(d_weight_k, weight_k, C * total_dim * sizeof(float), cudaMemcpyHostToDevice));
+    cudaCheck(cudaMemcpy(d_weight_v, weight_v, C * total_dim * sizeof(float), cudaMemcpyHostToDevice));
+    cudaCheck(cudaMemcpy(d_weight_o, weight_o, total_dim * C * sizeof(float), cudaMemcpyHostToDevice));
+
+    int block_sizes[] = {32, 64, 128, 256, 512, 1024};
+
+    // CPU validation
+    multi_head_attention_forward_cpu(input, weight_q, weight_k, weight_v, weight_o,
+                                     out_cpu, B, T, C, head_dim, num_heads);
+
+    // Validate kernel correctness at different block sizes
+    for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
+        int block_size = block_sizes[j];
+        printf("Checking block size %d.\n", block_size);
+
+        multi_head_attention_forward_gpu1(d_input, d_weight_q, d_weight_k, d_weight_v, d_weight_o,
+                                          d_out, B, T, C, head_dim, num_heads, block_size);
+        cudaCheck(cudaMemcpy(out_gpu, d_out, B * T * C * sizeof(float), cudaMemcpyDeviceToHost));
+
+        validate_result(out_cpu, out_gpu, "multi_head_attention_output", B * T * C, eps);
+    }
+
+    printf("All results match. Starting benchmarks.\n\n");
+
+    // Benchmark kernel at different block sizes
+    for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
+        int block_size = block_sizes[j];
+
+        int repeat_times = 200;
+        float elapsed_time = benchmark_kernel(repeat_times, multi_head_attention_forward_gpu1,
+                                              d_input, d_weight_q, d_weight_k, d_weight_v, d_weight_o,
+                                              d_out, B, T, C, head_dim, num_heads, block_size);
+
+        // Napkin math: estimate the memory bandwidth achieved
+        long memory_ops = (2 * B * T * C + 2 * C * total_dim) * sizeof(float);
+        float memory_bandwidth = memory_ops / elapsed_time / 1e6;
+
+        printf("block_size %4d | time %.4f ms | bandwidth %.2f GB/s\n", block_size, elapsed_time, memory_bandwidth);
+    }
+
+    // Free memory
+    free(input);
+    free(weight_q);
+    free(weight_k);
+    free(weight_v);
+    free(weight_o);
+    free(out_cpu);
+    free(out_gpu);
+    cudaCheck(cudaFree(d_input));
+    cudaCheck(cudaFree(d_weight_q));
+    cudaCheck(cudaFree(d_weight_k));
+    cudaCheck(cudaFree(d_weight_v));
+    cudaCheck(cudaFree(d_weight_o));
+    cudaCheck(cudaFree(d_out));
+
+    return 0;
 }
