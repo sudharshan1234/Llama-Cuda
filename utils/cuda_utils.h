@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include<iostream>
 
 template<class T>
 __host__ __device__ T ceil_div(T dividend, T divisor) {
@@ -16,14 +17,21 @@ float* make_random_float(size_t N) {
 }
 
 
-void cuda_check(cudaError_t error, const char *file, int line) {
+void cuda_check(cudaError_t error, const char *file, int line, const char *func) {
     if (error != cudaSuccess) {
-        printf("[CUDA ERROR] at file %s:%d:\n%s\n", file, line,
-               cudaGetErrorString(error));
+        printf("[CUDA ERROR] at file %s:%d in function %s:\n%s\n", file, line, func, cudaGetErrorString(error));
+        printf("[CUDA ERROR CODE] %d\n", error);
         exit(EXIT_FAILURE);
     }
-};
-#define cudaCheck(err) (cuda_check(err, __FILE__, __LINE__))
+}
+#define cudaCheck(err) (cuda_check(err, __FILE__, __LINE__, __func__))
+
+#define cublasCheck(status) do { \
+    if (status != CUBLAS_STATUS_SUCCESS) { \
+        printf("cuBLAS Error at %s:%d - %d\n", __FILE__, __LINE__, status); \
+        exit(EXIT_FAILURE); \
+    } \
+} while(0)
 
 template<class Kernel, class... KernelArgs>
 float benchmark_kernel(int repeats, Kernel kernel, KernelArgs&&... kernel_args) {

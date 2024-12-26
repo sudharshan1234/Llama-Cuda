@@ -72,7 +72,7 @@ __global__ void rope_forward_gpu_kernel2(float* output, float* input, int B, int
     int t = (idx / (C/2)) % T;
     int c = idx % (C/2);
 
-    int even_idx = dim_pair * 2;
+    int even_idx = c * 2;
     int odd_idx = even_idx + 1;
 
     float angle = t * freq_inv[c];
@@ -90,7 +90,7 @@ __global__ void rope_forward_gpu_kernel2(float* output, float* input, int B, int
     output_ptr[odd_idx] = even_val * sin_val + odd_val * cos_val;
 }
 
-void rope_forward1(float* input, float* output, int B, int T, int C, float* freq_inv, int block_size) {
+void rope_forward1( float* output, float* input, int B, int T, int C, float* freq_inv, int block_size) {
     if (C % 2 != 0) {
         fprintf(stderr, "Embedding dimension C must be even for RoPE.\n");
         return;
@@ -104,7 +104,7 @@ void rope_forward1(float* input, float* output, int B, int T, int C, float* freq
     cudaDeviceSynchronize();
 }
 
-void rope_forward2(float* input, float* output, int B, int T, int C, float* freq_inv, int block_size) {
+void rope_forward2(float* output, float* input, int B, int T, int C, float* freq_inv, int block_size) {
     if (C % 2 != 0) {
         fprintf(stderr, "Embedding dimension C must be even for RoPE.\n");
         return;
@@ -138,10 +138,9 @@ int main(int argc, char **argv) {
     int B = 8;
     int T = 1024;
     int C = 768;
-    float eps = 1e-6;
 
     int deviceIdx = 0;
-    int kernel_num = 2;
+    int kernel_num = 1;
     cudaCheck(cudaSetDevice(deviceIdx));
     // create host memory of random numbers
     float *out = (float*)malloc(B * T * C * sizeof(float));
@@ -152,12 +151,13 @@ int main(int argc, char **argv) {
         freq_inv[i] = 1.0f / powf(10000.0f, 2.0f * i / C);
     }
     // move to GPU
-    float *d_out, *d_X;
+    float *d_out, *d_X, *d_freq_inv;
 
     cudaCheck(cudaMalloc((void**)&d_out, B * T * C * sizeof(float)));
     cudaCheck(cudaMalloc((void**)&d_X, B * T * C * sizeof(float)));
+    cudaCheck(cudaMalloc((void**)&d_freq_inv, (C / 2) * sizeof(float)));
     cudaCheck(cudaMemcpy(d_X, X, B * T * C * sizeof(float), cudaMemcpyHostToDevice));
-
+    cudaCheck(cudaMemcpy(d_freq_inv, d_freq_inv, (C / 2) * sizeof(float), cudaMemcpyHostToDevice));
 
     int block_sizes[] = {32, 64, 128, 256, 512, 1024};
 
@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
         int block_size = block_sizes[j];
         printf("Checking block size %d.\n", block_size);
 
-        rope_forward(kernel_num, d_out, d_X, B, T, C,freq_inv, block_size);
+        rope_forward(kernel_num, d_out, d_X, B, T, C, d_freq_inv, block_size);
         cudaCheck(cudaMemcpy(out_gpu, d_out, B * T * C * sizeof(float), cudaMemcpyDeviceToHost));
 
         validate_result(d_out, out, "out", B * T * C, 1e-5f);
@@ -182,7 +182,7 @@ int main(int argc, char **argv) {
 
         int repeat_times = 200;
         float elapsed_time = benchmark_kernel(repeat_times, rope_forward,
-                                              kernel_num, d_out, d_X, B, T, C,  eps, scale, shift, block_size);
+                                              kernel_num, d_out, d_X, B, T, C, freq_inv, block_size);
 
         // napkin math: estimate the memory bandwidth achieved
         // e.g. A100 40GB PCIe is advertised at 1,555GB/s
@@ -194,7 +194,9 @@ int main(int argc, char **argv) {
 
     // free memory
     free(out);
+    free(out_gpu);
     free(X);
+    free(freq_inv);
     cudaCheck(cudaFree(d_out));
     cudaCheck(cudaFree(d_X));
 
