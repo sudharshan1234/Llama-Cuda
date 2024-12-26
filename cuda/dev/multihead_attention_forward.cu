@@ -228,7 +228,6 @@ void multi_head_attention_forward_gpu1(
 
     int qkv_size = B * T * C; 
     int batch_count = B * num_heads;
-    float alpha = 1.0f, beta = 0.0f;
     float *Q, *K, *V;
     cudaCheck(cudaMalloc(&Q, qkv_size * sizeof(float)));
     cudaCheck(cudaMalloc(&K, qkv_size * sizeof(float)));
@@ -237,71 +236,62 @@ void multi_head_attention_forward_gpu1(
     cublasHandle_t handle = createCublasHandle();
     cudaCheck(cudaDeviceSynchronize());
 
-    // Compute Q (B * num_head, T, head_dim) =  input (B * num_head, T, C) * weight_q (C, head_dim)
-    // cublasCheck(cublasSgemm(
-    //     handle,
-    //     CUBLAS_OP_T,
-    //     CUBLAS_OP_T,
-    //     T, head_dim, C,
-    //     &alpha,
-    //     input, T,
-    //     weight_q, head_dim,
-    //     &beta,
-    //     Q, T
-    // ));
+    // Leading dimensions and strides
+    int lda = T;                   // Leading dimension of input matrices
+    int ldb = C;                   // Leading dimension of weight_q
+    int ldc = T;                   // Leading dimension of output matrices
+    long long int strideA = T * C; // Stride between batches for input
+    long long int strideB = 0;     // Stride for shared weight_q (constant across batches)
+    long long int strideC = T * head_dim; // Stride between batches for output
+
+    // GEMM parameters
+    int m = T;               // Number of rows of the output matrix
+    int n = head_dim;        // Number of columns of the output matrix
+    int k = C;               // Inner dimension of the matrix multiplication
+    float alpha = 1.0f;
+    float beta = 0.0f;
+
+    // Compute Q
     cublasCheck(cublasSgemmStridedBatched(
         handle,
-        CUBLAS_OP_T,
-        CUBLAS_OP_T,
-        T, head_dim, C,           // Dimensions of GEMM (output_dim, sequence_length, input_dim)
-        &alpha,                   // Alpha
-        input, T, T * C,          // Input matrix
-        weight_q, head_dim, 0,           // Weight matrix Q (stride 0 as shared across batches)
-        &beta,                    // Beta
-        Q, T, T * head_dim, // Output Q
-        batch_count
-    ));
-    cudaCheck(cudaDeviceSynchronize());
-    cublasCheck(cublasSgemmStridedBatched(
-        handle,
-        CUBLAS_OP_T,
         CUBLAS_OP_N,
-        head_dim, T, C,           // Dimensions of GEMM (output_dim, sequence_length, input_dim)
-        &alpha,                   // Alpha
-        weight_q, C, 0,           // Weight matrix Q (stride 0 as shared across batches)
-        input, T, T * C,          // Input matrix
-        &beta,                    // Beta
-        Q, head_dim, T * head_dim, // Output Q
-        batch_count
+        CUBLAS_OP_N,
+        n, m, k,                // Dimensions of GEMM
+        &alpha,                 // Alpha
+        weight_q, ldb, strideB, // Weight matrix Q C Num_head*head dim
+        input, lda, strideA,    // Input matrix B T C
+        &beta,                  // Beta
+        Q, ldc, strideC,        // Output Q
+        B                       // Batch count
     ));
     cudaCheck(cudaDeviceSynchronize());
 
     // Compute K = input * weight_k
     cublasCheck(cublasSgemmStridedBatched(
         handle,
-        CUBLAS_OP_T,
         CUBLAS_OP_N,
-        head_dim, T, C,
-        &alpha,
-        weight_k, C, 0,
-        input, C, T * C,
-        &beta,
-        K, head_dim, T * head_dim,
-        batch_count
+        CUBLAS_OP_N,
+        n, m, k,                // Dimensions of GEMM
+        &alpha,                 // Alpha
+        weight_k, ldb, strideB, // Weight matrix K
+        input, lda, strideA,    // Input matrix
+        &beta,                  // Beta
+        K, ldc, strideC,        // Output K
+        B                       // Batch count
     ));
 
     // Compute V = input * weight_v
     cublasCheck(cublasSgemmStridedBatched(
         handle,
-        CUBLAS_OP_T,
         CUBLAS_OP_N,
-        head_dim, T, C,
-        &alpha,
-        weight_v, C, 0,
-        input, C, T * C,
-        &beta,
-        V, head_dim, T * head_dim,
-        batch_count
+        CUBLAS_OP_N,
+        n, m, k,                // Dimensions of GEMM
+        &alpha,                 // Alpha
+        weight_v, ldb, strideB, // Weight matrix V
+        input, lda, strideA,    // Input matrix
+        &beta,                  // Beta
+        V, ldc, strideC,        // Output V
+        B                       // Batch count
     ));
 
     float* attention_scores;
@@ -315,7 +305,7 @@ void multi_head_attention_forward_gpu1(
         Q, K, attention_scores, B, T, C, head_dim, num_heads);
     cudaCheck(cudaDeviceSynchronize());
     int softmax_shared_memory_size = 2 * (block_size / 32) * sizeof(float);
-    softmax_query_key_kernel<<<attention_blocks, block_size, softmax_shared_memory_size>>>(
+    softmax_query_key_kernel<<<B * num_heads, block_size, softmax_shared_memory_size>>>(
         attention_scores, softmax_output, B, T, C, head_dim, num_heads, block_size);
     cudaCheck(cudaDeviceSynchronize());
     float* attention_output;
@@ -324,29 +314,32 @@ void multi_head_attention_forward_gpu1(
     // Attention output (B * num_head, T, head_dim) = softmax(scores) (B * num_head, T, T) * V (B * num_head, T, head_dim)
     cublasCheck(cublasSgemmStridedBatched(
         handle,
-        CUBLAS_OP_N,                 // No transpose for softmax_output
-        CUBLAS_OP_N,                 // No transpose for V
-        head_dim, T, T,              // GEMM dimensions: m, n, k
-        &alpha,                      // Alpha scaling factor
-        softmax_output, T, T * T,    // Matrix A: lda = T, strideA = T * T
-        V, T, T * head_dim,          // Matrix B: ldb = T, strideB = T * head_dim
-        &beta,                       // Beta scaling factor
-        attention_output, T, T * head_dim, // Matrix C: ldc = head_dim, strideC = T * head_dim
-        batch_count                  // Number of batches
+        CUBLAS_OP_N,               // No transpose for softmax(scores)
+        CUBLAS_OP_N,               // No transpose for V
+        head_dim, T, T,                   // Dimensions of GEMM (head_dim, T, T)
+        &alpha,                    // Alpha
+        V, head_dim, strideC,           // V matrix
+        softmax_output, T, T * T, // Softmax scores matrix
+        &beta,                     // Beta
+        attention_output, head_dim, strideC, // Attention output matrix
+        batch_count                       // Batch count
     ));
-    // Concatenate heads and project back to output space: output = attention_output * weight_o
+
+    cudaCheck(cudaDeviceSynchronize());
+    // Concatenate heads and project back to output space: output (B , T, C)  = attention_output (B * num_head, T, head_dim) * weight_o (head_dim * num_head, C)
     cublasCheck(cublasSgemmStridedBatched(
         handle,
         CUBLAS_OP_N,
         CUBLAS_OP_N,
-        C, T, head_dim * num_heads,
-        &alpha,
-        weight_o, C, 0,
-        attention_output, head_dim * num_heads, T * head_dim * num_heads,
-        &beta,
-        output, C, T * C,
-        batch_count
+        C, T, num_heads * head_dim,                // Dimensions of GEMM
+        &alpha,                 // Alpha
+        weight_o, C, 0, // Weight matrix V
+        attention_output, head_dim, T * head_dim,    // Input matrix
+        &beta,                  // Beta
+        output, C, T * head_dim,        // Output V
+        B                       // Batch count
     ));
+    cudaCheck(cudaDeviceSynchronize());
 
     cudaFree(Q);
     cudaFree(K);
