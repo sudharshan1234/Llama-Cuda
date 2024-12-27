@@ -96,6 +96,9 @@ void validate_result(D* device_result, const T* cpu_reference, const char* name,
                 exit(EXIT_FAILURE);
             }
         }
+        else{
+            printf("Match of %s at %d: CPU_ref: %f vs GPU: %f\n", name, i, cpu_reference[i], (T)out_gpu[i]);
+        }
     }
 
     if (nfaults > 0) {
