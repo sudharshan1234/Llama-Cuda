@@ -6,41 +6,37 @@
 
 
 void rope_forward_cpu(
-    float* output,
-    float* input, 
-    int B,         
-    int T,          
-    int C,
-    float* freq_inv        
+    float* output,      // Pointer to the output tensor
+    const float* input, // Pointer to the input tensor
+    int B,              // Batch size
+    int T,              // Sequence length
+    int C,              // Hidden size (must be even)
+    const float* freq_inv // Pointer to the frequency inverse array
 ) {
-    if (C % 2 != 0) {
-        fprintf(stderr, "Embedding dimension C must be even for RoPE.\n");
-        return;
-    }
+    // Iterate over the batches
+    for (int b = 0; b < B; ++b) {
+        for (int t = 0; t < T; ++t) {
+            for (int c = 0; c < C / 2; ++c) {
+                int even_idx = c * 2;
+                int odd_idx = even_idx + 1;
 
-    // Loop over batches, tokens, and pairs of dimensions
-    for (int b = 0; b < B; b++) {         // Batch
-        for (int t = 0; t < T; t++) {     // Token (position)
-            for (int c = 0; c < C / 2; c++) {  // Dimension pairs
-                int even_idx = c * 2;     // Even dimension index
-                int odd_idx = even_idx + 1; // Odd dimension index
-
-                // Compute angle for rotation
+                // Calculate the positional angle
                 float angle = t * freq_inv[c];
-                float cos_val = cosf(angle);
-                float sin_val = sinf(angle);
+                float cos_val = std::cos(angle);
+                float sin_val = std::sin(angle);
 
-                // Rotate the values
-                float even_val = input[b * T * C + t * C + even_idx];
-                float odd_val = input[b * T * C + t * C + odd_idx];
-                output[b * T * C + t * C + even_idx] = even_val * cos_val - odd_val * sin_val;
-                output[b * T * C + t * C + odd_idx] = even_val * sin_val + odd_val * cos_val;
+                // Access the input values
+                const float* input_ptr = input + b * T * C + t * C;
+                float even_val = input_ptr[even_idx];
+                float odd_val = input_ptr[odd_idx];
+
+                // Compute the rotated values
+                float* output_ptr = output + b * T * C + t * C;
+                output_ptr[even_idx] = even_val * cos_val - odd_val * sin_val;
+                output_ptr[odd_idx] = even_val * sin_val + odd_val * cos_val;
             }
         }
     }
-
-    // Free allocated memory
-    free(freq_inv);
 }
 
 __global__ void rope_forward_gpu_kernel1(float* output, float* input, int B, int T, int C, float* freq_inv){
@@ -136,11 +132,11 @@ int main(int argc, char **argv) {
     srand(0);
 
     int B = 8;
-    int T = 1024;
-    int C = 768;
+    int T = 4;
+    int C = 8;
 
     int deviceIdx = 0;
-    int kernel_num = 1;
+    int kernel_num = 2;
     cudaCheck(cudaSetDevice(deviceIdx));
     // create host memory of random numbers
     float *out = (float*)malloc(B * T * C * sizeof(float));
@@ -157,7 +153,7 @@ int main(int argc, char **argv) {
     cudaCheck(cudaMalloc((void**)&d_X, B * T * C * sizeof(float)));
     cudaCheck(cudaMalloc((void**)&d_freq_inv, (C / 2) * sizeof(float)));
     cudaCheck(cudaMemcpy(d_X, X, B * T * C * sizeof(float), cudaMemcpyHostToDevice));
-    cudaCheck(cudaMemcpy(d_freq_inv, d_freq_inv, (C / 2) * sizeof(float), cudaMemcpyHostToDevice));
+    cudaCheck(cudaMemcpy(d_freq_inv, freq_inv, (C / 2) * sizeof(float), cudaMemcpyHostToDevice));
 
     int block_sizes[] = {32, 64, 128, 256, 512, 1024};
 
@@ -182,7 +178,7 @@ int main(int argc, char **argv) {
 
         int repeat_times = 200;
         float elapsed_time = benchmark_kernel(repeat_times, rope_forward,
-                                              kernel_num, d_out, d_X, B, T, C, freq_inv, block_size);
+                                              kernel_num, d_out, d_X, B, T, C, d_freq_inv, block_size);
 
         // napkin math: estimate the memory bandwidth achieved
         // e.g. A100 40GB PCIe is advertised at 1,555GB/s
