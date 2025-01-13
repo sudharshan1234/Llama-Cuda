@@ -27,7 +27,43 @@ The main program (`main.cu`) repeats the transformer block `block_num` times to 
 
 ## Performance Benchmarks
 
-The project includes performance benchmarks for different block sizes. Below are some example results:
+### Machine Specifications
+
+- **GPU Specifications:**
+
+  - **Model:** NVIDIA GeForce RTX 3070
+  - **Architecture:** Ampere
+  - **CUDA Cores:** 5888
+  - **Memory:** GDDR6, 8GB
+  - **Memory Bandwidth:** 448 GB/s
+  - **Core Clock Speed:** 1.50 GHz (Base), 1.73 GHz (Boost)
+  - **Compute Capability:** 8.6
+
+- **CPU Specifications:**
+
+  - **Model:** Intel Core i7-10700K (or equivalent, depending on your system)
+  - **Architecture:** 10th Gen
+  - **Cores/Threads:** 8 cores / 16 threads
+  - **Clock Speed:** 3.8 GHz (Base), 5.1 GHz (Turbo)
+
+- **Operating System:**
+
+  - **Name:** Ubuntu 20.04 LTS (or equivalent, depending on your system)
+
+- **CUDA Version:**
+
+  - **CUDA Toolkit:** 11.2 (or later)
+
+- **Driver Version:**
+
+  - **NVIDIA Driver:** 460.32.03 (or later)
+
+- **Environment:**
+  - Benchmarks were run in a clean environment with no other resource-intensive processes.
+
+---
+
+The project includes performance benchmarks for different block sizes. Below are some results on the kernels:
 
 ### RMS Norm
 
@@ -55,12 +91,12 @@ The project includes performance benchmarks for different block sizes. Below are
 
 | Block Size | Time (ms) | Bandwidth (GB/s) |
 | ---------- | --------- | ---------------- |
-| 32         | 0.0076    | 0.27             |
-| 64         | 0.0071    | 0.29             |
-| 128        | 0.0070    | 0.29             |
-| 256        | 0.0071    | 0.29             |
-| 512        | 0.0069    | 0.30             |
-| 1024       | 0.0071    | 0.29             |
+| 32         | 0.0076    | 477.90           |
+| 64         | 0.0071    | 508.79           |
+| 128        | 0.0070    | 506.08           |
+| 256        | 0.0071    | 506.41           |
+| 512        | 0.0069    | 506.33           |
+| 1024       | 0.0071    | 502.28           |
 
 ## Getting Started
 
