@@ -3,7 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 // Backward implementation for multi-head attention
 void multi_head_attention_backward_gpu(

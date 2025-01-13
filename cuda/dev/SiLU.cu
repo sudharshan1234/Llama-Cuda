@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include<cuda_runtime.h>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 
 __global__ void silu_forward_kernel(const float* x, float* y, int n) {

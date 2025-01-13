@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 // Function for RMS normalization on CPU
 void rms_norm_forward_cpu(float *out, float *X, int B, int T, int C, float eps, float scale, float shift) {

@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 
 void rope_forward_cpu(
