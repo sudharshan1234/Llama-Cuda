@@ -1,29 +1,20 @@
+#ifndef CUDA_UTILS_H
+#define CUDA_UTILS_H
+
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
-#include<iostream>
+#include <iostream>
 
+// Declare utility functions
 template<class T>
 __host__ __device__ T ceil_div(T dividend, T divisor) {
     return (dividend + divisor-1) / divisor;
 }
 
-float* make_random_float(size_t N) {
-    float* arr = (float*)malloc(N * sizeof(float));
-    for (size_t i = 0; i < N; i++) {
-        arr[i] = ((float)rand() / RAND_MAX) * 2.0 - 1.0; // range -1..1
-    }
-    return arr;
-}
+float* make_random_float(size_t N);
 
-
-void cuda_check(cudaError_t error, const char *file, int line, const char *func) {
-    if (error != cudaSuccess) {
-        printf("[CUDA ERROR] at file %s:%d in function %s:\n%s\n", file, line, func, cudaGetErrorString(error));
-        printf("[CUDA ERROR CODE] %d\n", error);
-        exit(EXIT_FAILURE);
-    }
-}
+void cuda_check(cudaError_t error, const char *file, int line, const char *func);
 #define cudaCheck(err) (cuda_check(err, __FILE__, __LINE__, __func__))
 
 #define cublasCheck(status) do { \
@@ -32,6 +23,7 @@ void cuda_check(cudaError_t error, const char *file, int line, const char *func)
         exit(EXIT_FAILURE); \
     } \
 } while(0)
+
 
 template<class Kernel, class... KernelArgs>
 float benchmark_kernel(int repeats, Kernel kernel, KernelArgs&&... kernel_args) {
@@ -70,7 +62,7 @@ float benchmark_kernel(int repeats, Kernel kernel, KernelArgs&&... kernel_args) 
 }
 
 template<class D, class T>
-void validate_result(D* device_result, const T* cpu_reference, const char* name, std::size_t num_elements, T tolerance=1e-4) {
+void validate_result(D* device_result, const T* cpu_reference, const char* name, std::size_t num_elements, T tolerance) {
     D* out_gpu = (D*)malloc(num_elements * sizeof(D));
     cudaCheck(cudaMemcpy(out_gpu, device_result, num_elements * sizeof(D), cudaMemcpyDeviceToHost));
     int nfaults = 0;
@@ -109,22 +101,7 @@ void validate_result(D* device_result, const T* cpu_reference, const char* name,
     free(out_gpu);
 }
 
-// Function to create a cuBLAS handle
-cublasHandle_t createCublasHandle() {
-    cublasHandle_t handle;
-    cublasStatus_t status = cublasCreate(&handle);
-    if (status != CUBLAS_STATUS_SUCCESS) {
-        std::cerr << "Failed to create cuBLAS handle!" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-    return handle;
-}
+cublasHandle_t createCublasHandle();
+void destroyCublasHandle(cublasHandle_t handle);
 
-// Function to destroy a cuBLAS handle
-void destroyCublasHandle(cublasHandle_t handle) {
-    cublasStatus_t status = cublasDestroy(handle);
-    if (status != CUBLAS_STATUS_SUCCESS) {
-        std::cerr << "Failed to destroy cuBLAS handle!" << std::endl;
-        exit(EXIT_FAILURE);
-    }
-}
+#endif // CUDA_UTILS_H

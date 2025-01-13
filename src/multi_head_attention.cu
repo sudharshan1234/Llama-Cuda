@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include<cuda_runtime.h>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 #include <float.h>
 #include "../include/multi_head_attention.cuh"
 

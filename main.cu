@@ -1,5 +1,5 @@
 #include "../include/transformer_block.cuh"
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 #include <iostream>
 #include <cstdlib>
 
@@ -36,8 +36,8 @@ int main() {
     float *ffn_bias1 = make_random_float(4 * C);
     float *ffn_bias2 = make_random_float(C);
 
-    float *rms_norm_weight = make_random_float(C);
-    float *rms_norm_bias = make_random_float(C);
+    float rms_norm_weight = 1.0;
+    float rms_norm_bias = 0.0;
 
     // Call the Transformer block
     transformer_block_forward(
@@ -50,10 +50,6 @@ int main() {
 
     // Copy output back to host
     cudaCheck(cudaMemcpy(output, d_output, B * T * C * sizeof(float), cudaMemcpyDeviceToHost));
-
-    // Validate results (optional)
-    // float* expected_output = ...; // Compute expected output (e.g., using a reference implementation)
-    // validate_result(output, expected_output, "output", B * T * C);
 
     // Free memory
     free(input);

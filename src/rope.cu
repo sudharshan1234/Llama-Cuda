@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <cmath>
 #include <vector>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 #include "../include/rope.cuh"
 
 __global__ void rope_forward_gpu_kernel1(float* output, float* input, int B, int T, int C, float* freq_inv){
@@ -92,75 +92,4 @@ void rope_forward(int kernel_num, float* output, float* input, int B, int T, int
             printf("Invalid kernel number\n");
             exit(1);
     }
-}
-
-int main(int argc, char **argv) {
-    srand(0);
-
-    int B = 8;
-    int T = 4;
-    int C = 8;
-
-    int deviceIdx = 0;
-    int kernel_num = 2;
-    cudaCheck(cudaSetDevice(deviceIdx));
-    // create host memory of random numbers
-    float *out = (float*)malloc(B * T * C * sizeof(float));
-    float *out_gpu = (float*)malloc(B * T * C * sizeof(float));
-    float *X = make_random_float(B * T * C);
-    float* freq_inv = (float*)malloc((C / 2) * sizeof(float));
-    for (int i = 0; i < C / 2; i++) {
-        freq_inv[i] = 1.0f / powf(10000.0f, 2.0f * i / C);
-    }
-    // move to GPU
-    float *d_out, *d_X, *d_freq_inv;
-
-    cudaCheck(cudaMalloc((void**)&d_out, B * T * C * sizeof(float)));
-    cudaCheck(cudaMalloc((void**)&d_X, B * T * C * sizeof(float)));
-    cudaCheck(cudaMalloc((void**)&d_freq_inv, (C / 2) * sizeof(float)));
-    cudaCheck(cudaMemcpy(d_X, X, B * T * C * sizeof(float), cudaMemcpyHostToDevice));
-    cudaCheck(cudaMemcpy(d_freq_inv, freq_inv, (C / 2) * sizeof(float), cudaMemcpyHostToDevice));
-
-    int block_sizes[] = {32, 64, 128, 256, 512, 1024};
-
-    rope_forward_cpu(out, X, B, T, C, freq_inv);
-
-    // check the correctness of the kernel at all block sizes
-    for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
-        int block_size = block_sizes[j];
-        printf("Checking block size %d.\n", block_size);
-
-        rope_forward(kernel_num, d_out, d_X, B, T, C, d_freq_inv, block_size);
-        cudaCheck(cudaMemcpy(out_gpu, d_out, B * T * C * sizeof(float), cudaMemcpyDeviceToHost));
-
-        validate_result(d_out, out, "out", B * T * C, 1e-5f);
-    }
-
-    printf("All results match. Starting benchmarks.\n\n");
-
-    // time the kernel at different block sizes
-    for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
-        int block_size = block_sizes[j];
-
-        int repeat_times = 200;
-        float elapsed_time = benchmark_kernel(repeat_times, rope_forward,
-                                              kernel_num, d_out, d_X, B, T, C, d_freq_inv, block_size);
-
-        // napkin math: estimate the memory bandwidth achieved
-        // e.g. A100 40GB PCIe is advertised at 1,555GB/s
-        long memory_ops = (2 * B * T * C) * 4; // *4 for float
-        float memory_bandwidth = memory_ops / elapsed_time / 1e6;
-
-        printf("block_size %4d | time %.4f ms | bandwidth %.2f GB/s\n", block_size, elapsed_time, memory_bandwidth);
-    }
-
-    // free memory
-    free(out);
-    free(out_gpu);
-    free(X);
-    free(freq_inv);
-    cudaCheck(cudaFree(d_out));
-    cudaCheck(cudaFree(d_X));
-
-    return 0;
 }
