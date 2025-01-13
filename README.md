@@ -1,6 +1,6 @@
 # Llama Implementation with Custom CUDA Kernels
 
-This project implements a Llama using custom CUDA kernels for various operations, including RMS Norm, Softmax, Multihead Attention Forward, RoPE (Rotary Positional Embedding), and FFN (Feed-Forward Network). The transformer block is repeated `block_num` times in the main program to simulate a multi-layer transformer model.
+This project implements a Llama architecture using custom CUDA kernels for various operations, including RMS Norm, Softmax, Multihead Attention Forward, RoPE (Rotary Positional Embedding), and FFN (Feed-Forward Network). The transformer block is repeated `block_num` times in the main program to simulate a multi-layer transformer model.
 
 ## Key Components
 
@@ -41,22 +41,22 @@ The main program (`main.cu`) repeats the transformer block `block_num` times to 
 
 - **CPU Specifications:**
 
-  - **Model:** Intel Core i7-10700K (or equivalent, depending on your system)
+  - **Model:** Intel Core i7-10700K
   - **Architecture:** 10th Gen
   - **Cores/Threads:** 8 cores / 16 threads
   - **Clock Speed:** 3.8 GHz (Base), 5.1 GHz (Turbo)
 
 - **Operating System:**
 
-  - **Name:** Ubuntu 20.04 LTS (or equivalent, depending on your system)
+  - **Name:** Ubuntu 20.04 LTS
 
 - **CUDA Version:**
 
-  - **CUDA Toolkit:** 11.2 (or later)
+  - **CUDA Toolkit:** 11.2
 
 - **Driver Version:**
 
-  - **NVIDIA Driver:** 460.32.03 (or later)
+  - **NVIDIA Driver:** 460.32.03
 
 - **Environment:**
   - Benchmarks were run in a clean environment with no other resource-intensive processes.
