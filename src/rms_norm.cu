@@ -3,32 +3,8 @@
 #include <cmath>
 #include <vector>
 #include "cuda_utils.cuh"
+#include "../include/rms_norm.cuh"
 
-// Function for RMS normalization on CPU
-void rms_norm_forward_cpu(float *out, float *X, int B, int T, int C, float eps, float scale, float shift) {
-    // Iterate over each batch (B) and each time step (T)
-    for (int b = 0; b < B; ++b) {
-        for (int t = 0; t < T; ++t) {
-            // Compute the starting index for the (b, t) slice
-            int index = (b * T + t) * C;
-
-            // Calculate sum of squares for the C elements in the (b, t) slice
-            float sum = 0.0f;
-            for (int i = 0; i < C; ++i) {
-                float tempX = X[index + i];
-                sum += tempX * tempX;
-            }
-
-            // Calculate RMS: sqrt(mean of squared values) + epsilon
-            float rms = std::sqrt(sum / C + eps);
-
-            // Normalize and scale each element in the (b, t) slice
-            for (int i = 0; i < C; ++i) {
-                out[index + i] = (X[index + i] / rms) * scale + shift;
-            }
-        }
-    }
-}
 
 // Kernel 1: Naive Implementation parallelizes over B,T, loops over C
 __global__ void rms_norm_forward_kernel1(float *out, float *X, int B, int T, int C, float eps, float scale, float shift){
@@ -165,71 +141,4 @@ void rms_norm_forward(int kernel_num, float *out, float *X, int B, int T, int C,
             printf("Invalid kernel number\n");
             exit(1);
     }
-}
-
-int main(int argc, char **argv) {
-    srand(0);
-
-    int B = 8;
-    int T = 1024;
-    int C = 768;
-    float eps = 1e-6;
-    float scale = 1.0f;
-    float shift = 0.0f;
-
-    int deviceIdx = 0;
-    int kernel_num = 3;
-    cudaCheck(cudaSetDevice(deviceIdx));
-    // create host memory of random numbers
-    float *out = (float*)malloc(B * T * C * sizeof(float));
-    float *out_gpu = (float*)malloc(B * T * C * sizeof(float));
-    float *X = make_random_float(B * T * C);
-    // move to GPU
-    float *d_out, *d_X;
-
-    cudaCheck(cudaMalloc((void**)&d_out, B * T * C * sizeof(float)));
-    cudaCheck(cudaMalloc((void**)&d_X, B * T * C * sizeof(float)));
-    cudaCheck(cudaMemcpy(d_X, X, B * T * C * sizeof(float), cudaMemcpyHostToDevice));
-
-
-    int block_sizes[] = {32, 64, 128, 256, 512, 1024};
-
-    rms_norm_forward_cpu(out, X, B, T, C, eps, scale, shift);
-
-    // check the correctness of the kernel at all block sizes
-    for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
-        int block_size = block_sizes[j];
-        printf("Checking block size %d.\n", block_size);
-
-        rms_norm_forward(kernel_num, d_out, d_X, B, T, C,  eps, scale, shift, block_size);
-        cudaCheck(cudaMemcpy(out_gpu, d_out, B * T * C * sizeof(float), cudaMemcpyDeviceToHost));
-
-        validate_result(d_out, out, "out", B * T * C, 1e-5f);
-    }
-
-    printf("All results match. Starting benchmarks.\n\n");
-
-    // time the kernel at different block sizes
-    for (int j = 0; j < sizeof(block_sizes) / sizeof(int); j++) {
-        int block_size = block_sizes[j];
-
-        int repeat_times = 200;
-        float elapsed_time = benchmark_kernel(repeat_times, rms_norm_forward,
-                                              kernel_num, d_out, d_X, B, T, C,  eps, scale, shift, block_size);
-
-        // napkin math: estimate the memory bandwidth achieved
-        // e.g. A100 40GB PCIe is advertised at 1,555GB/s
-        long memory_ops = (2 * B * T * C) * 4; // *4 for float
-        float memory_bandwidth = memory_ops / elapsed_time / 1e6;
-
-        printf("block_size %4d | time %.4f ms | bandwidth %.2f GB/s\n", block_size, elapsed_time, memory_bandwidth);
-    }
-
-    // free memory
-    free(out);
-    free(X);
-    cudaCheck(cudaFree(d_out));
-    cudaCheck(cudaFree(d_X));
-
-    return 0;
 }

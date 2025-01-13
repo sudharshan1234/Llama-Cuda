@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include<cuda_runtime.h>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 // Function to compute the backward pass of RMS normalization on the CPU
 void rms_norm_backward_cpu(float *d_input,  // Gradient w.r.t input (output we want to compute)

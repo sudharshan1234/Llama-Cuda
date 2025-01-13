@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include<cuda_runtime.h>
-#include "cuda_utils.h"
+#include "cuda_utils.cuh"
 
 void softmax_cpu(float* x, int length) {
     float max_val = x[0];
