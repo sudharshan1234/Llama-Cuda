@@ -4,7 +4,8 @@
 #include<cuda_runtime.h>
 #include "cuda_utils.cuh"
 #include <float.h>
-#include "../include/multi_head_attention.cuh"
+#include "multi_head_attention.cuh"
+#include "rope.cuh"
 
 
 __device__ float warpReduceMax(float val) {
@@ -189,6 +190,14 @@ void multi_head_attention_forward_gpu1(
     float alpha = 1.0f;
     float beta = 0.0f;
 
+    float* freq_inv = (float*)malloc((C / 2) * sizeof(float));
+    for (int i = 0; i < C / 2; i++) {
+        freq_inv[i] = 1.0f / powf(10000.0f, 2.0f * i / C);
+    }
+    float *d_freq_inv;
+    cudaCheck(cudaMalloc((void**)&d_freq_inv, (C / 2) * sizeof(float)));
+    cudaCheck(cudaMemcpy(d_freq_inv, freq_inv, (C / 2) * sizeof(float), cudaMemcpyHostToDevice));
+
     // Compute Q (B, T, num_heads * head_dim) = Input (B, T, C) * Wq (C, num_heads * head_dim)
     cublasCheck(cublasSgemmStridedBatched(
         handle,
@@ -232,6 +241,8 @@ void multi_head_attention_forward_gpu1(
         B                       // Batch count
     ));
 
+    rope_forward(2, Q, Q, B, T, num_heads * head_dim, d_freq_inv, block_size); // Apply RoPE to Q
+    rope_forward(2, K, K, B, T, num_heads * head_dim, d_freq_inv, block_size); // Apply RoPE to K
 
     float* attention_scores;
     float* softmax_output;

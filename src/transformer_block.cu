@@ -46,10 +46,10 @@ void transformer_block_forward(
 ) {
     // Allocate memory for intermediate outputs
     float *attn_output, *norm_output1, *ffn_output, *norm_output2;
-    cudaMalloc(&attn_output, B * T * C * sizeof(float));
-    cudaMalloc(&norm_output1, B * T * C * sizeof(float));
-    cudaMalloc(&ffn_output, B * T * C * sizeof(float));
-    cudaMalloc(&norm_output2, B * T * C * sizeof(float));
+    cudaCheck(cudaMalloc(&attn_output, B * T * C * sizeof(float)));
+    cudaCheck(cudaMalloc(&norm_output1, B * T * C * sizeof(float)));
+    cudaCheck(cudaMalloc(&ffn_output, B * T * C * sizeof(float)));
+    cudaCheck(cudaMalloc(&norm_output2, B * T * C * sizeof(float)));
 
     // Multi-Head Attention
     multi_head_attention_forward_gpu1(
@@ -57,8 +57,12 @@ void transformer_block_forward(
         attn_output, B, T, C, head_dim, num_heads, block_size
     );
 
+    float eps = 1e-6f;
+    float scale = 1.0f;
+    float shift = 0.0f;
+
     // Add & Normalize (Residual Connection + RMS Norm)
-    rms_norm_forward3(norm_output1, attn_output, B, T, C, 1e-5f, rms_norm_weight, rms_norm_bias, block_size);
+    rms_norm_forward(3, norm_output1, attn_output, B, T, C, eps, scale, shift, block_size);
 
     // Feed-Forward Network
     ffn_kernel<<<(B * T * C + block_size - 1) / block_size, block_size>>>(
