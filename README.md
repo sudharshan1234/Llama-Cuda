@@ -113,19 +113,17 @@ To build the project, use the following command:
 nvcc -I ./include -lcublas -o ./build/transformer_block ./src/*.cu main.cu
 ```
 
-# This command:
+### This command:
 
-# - Includes the ./include directory for header files.
+- Includes the ./include directory for header files.
 
-# - Links the cublas library.
+- Links the cublas library.
 
-# - Compiles all .cu files in the ./src directory and main.cu.
+- Compiles all .cu files in the ./src directory and main.cu.
 
-# - Outputs the executable to ./build/transformer_block.
+- Outputs the executable to ./build/transformer_block.
 
-# Running the Program
-
-# After building the project, you can run the main program:
+## Running the Program
 
 ./build/transformer_block
 
@@ -133,6 +131,6 @@ nvcc -I ./include -lcublas -o ./build/transformer_block ./src/*.cu main.cu
 
 `nvcc -I ./include -lcublas -o ./build/attn_f ./cuda/dev/program.cu ./src/cuda_utils.cu`
 
-### After building the project, you can run the main program:
+And run:
 
-./build/program
+`./build/program`
