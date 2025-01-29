@@ -79,13 +79,10 @@ The project includes performance benchmarks for different block sizes. Below are
 ### Multihead attention
 
 | Block Size | Time (ms) | Bandwidth (GB/s) |
-| ---------- | --------- | ---------------- |
-| 32         | 0.3215    | 349.36           |
-| 64         | 0.3381    | 332.18           |
-| 128        | 0.3256    | 344.93           |
-| 256        | 0.3165    | 354.86           |
-| 512        | 0.3514    | 319.68           |
-| 1024       | 0.3460    | 324.62           |
+|------------|-----------|------------------|
+| 32         | 145.2367  | N/A            |
+| 64         | 145.7929  | N/A             |
+| 128        | 145.3862  | N/A             |
 
 ### ROPE
 
