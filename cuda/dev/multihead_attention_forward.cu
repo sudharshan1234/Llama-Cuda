@@ -486,7 +486,12 @@ int main() {
                                               d_out, B, T, C, head_dim, num_heads, block_size);
 
         // Napkin math: estimate the memory bandwidth achieved
-        long memory_ops = (2 * B * T * C + 2 * C * total_dim) * sizeof(float);
+        long memory_ops = (
+            4 * B * T * C + 
+            4 * C * (num_heads * head_dim) + 
+            8 * B * T * (num_heads * head_dim) + 
+            4 * B * num_heads * T * T
+        ) * sizeof(float);
         float memory_bandwidth = memory_ops / elapsed_time / 1e6;
 
         printf("block_size %4d | time %.4f ms | bandwidth %.2f GB/s\n", block_size, elapsed_time, memory_bandwidth);
