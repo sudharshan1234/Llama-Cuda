@@ -69,12 +69,9 @@ The project includes performance benchmarks for different block sizes. Below are
 
 | Block Size | Time (ms) | Bandwidth (GB/s) |
 | ---------- | --------- | ---------------- |
-| 32         | 23.0583   | 31.51            |
-| 64         | 18.3612   | 39.58            |
-| 128        | 18.3130   | 39.68            |
-| 256        | 18.1344   | 40.07            |
-| 512        | 18.3937   | 39.51            |
-| 1024       | 19.8065   | 36.69            |
+| 32         | 145.2367  | N/A              |
+| 64         | 145.7929  | N/A              |
+| 128        | 145.3862  | N/A              |
 
 ### ROPE
 
