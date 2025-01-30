@@ -70,7 +70,7 @@ void transformer_block_forward(
     );
 
     // Add & Normalize (Residual Connection + RMS Norm)
-    rms_norm_forward3(norm_output2, ffn_output, B, T, C, 1e-5f, rms_norm_weight, rms_norm_bias, block_size);
+    rms_norm_forward(3, norm_output2, ffn_output, B, T, C, eps, scale, shift, block_size);
 
     // Copy final output
     cudaMemcpy(output, norm_output2, B * T * C * sizeof(float), cudaMemcpyDeviceToDevice);
