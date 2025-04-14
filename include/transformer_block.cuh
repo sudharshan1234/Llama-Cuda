@@ -2,7 +2,7 @@
 #define TRANSFORMER_BLOCK_CUH
 
 #include <cuda_runtime.h>
-#include "multi_head_attention.cuh"
+#include "grouped_query_attention.cuh"
 #include "rms_norm.cuh"
 #include "rope.cuh"
 

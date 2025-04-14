@@ -133,20 +133,6 @@ void multi_head_attention_forward_cpu(
     free(attention_output);
 }
 
-__device__ float warpReduceMax(float val) {
-    for (int offset = 16; offset > 0; offset /= 2) {
-        val = fmaxf(val, __shfl_down_sync(0xFFFFFFFF, val, offset));
-    }
-    return val;
-}
-
-__device__ float warpReduceSum(float val) {
-    for (int offset = 16; offset > 0; offset /= 2) {
-        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
-    }
-    return val;
-}
-
 __global__ void attention_query_key_kernel1(float* Q, float* K, float* output, int B, int T, int C, int head_dim, int num_heads) {
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
     int num_elements = B * num_heads * T * T;
@@ -179,128 +165,17 @@ __global__ void attention_query_key_kernel1(float* Q, float* K, float* output, i
     output[idx] = val;
 }
 
-__global__ void softmax_query_key_kernel1(float *input, float *output, int B, int T, int C, int head_dim, int num_heads, int block_size) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_threads = B * T * num_heads;
-
-    if (idx < total_threads) {
-        int h = idx % num_heads;
-        int t = (idx / num_heads) % T;
-        int b = idx / (num_heads * T);
-
-        const float* input_temp = input + b*num_heads*T*T + h*T*T + t*T;
-        float* output_temp = output + b*num_heads*T*T + h*T*T + t*T;
-
-        // find maxval
-        float maxval = -FLT_MAX;
-        for (int t2 = 0; t2 <= t; t2++) {
-            if (input_temp[t2] > maxval) {
-                maxval = input_temp[t2];
-            }
-        }
-
-        // calculate the exp and keep track of sum
-        float expsum = 0.0f;
-        for (int t2 = 0; t2 <= t; t2++) {
-            float expv = expf(input_temp[t2] - maxval);
-            expsum += expv;
-            output_temp[t2] = expv;
-        }
-        float expsum_inv = expsum == 0.0f ? 0.0f : 1.0f / expsum;
-
-        // normalize to get the softmax
-        for (int t2 = 0; t2 < T; t2++) {
-            if (t2 <= t) {
-                output_temp[t2] *= expsum_inv;
-            } else {
-                // causal attention mask. not strictly necessary to set to zero here
-                // only doing this explicitly for debugging and checking to PyTorch
-                output_temp[t2] = 0.0f;
-            }
-        }
-    }
-}
-
-__global__ void softmax_query_key_kernel2(float *input, float *output, int B, int T, int C, int head_dim, int num_heads, int block_size){
-    extern __shared__ float shared[]; // 2 * block_size/32
-    int tid = threadIdx.x; //0 - block_size
-    int idx = blockIdx.x; // b*num_heads*T + n*T + t1
-    int warpId = tid / 32;
-    int laneId = tid % 32;
-    input += idx * T;
-    output += idx * T;
-    float *max_val = &shared[0];
-    float *sum_val = &shared[block_size/32];
-    float max_num = -INFINITY;
-    for(int i=tid; i<T; i += block_size){
-        max_num = fmaxf(max_num, input[i]);
-    }
-
-    max_num = warpReduceMax(max_num);
-
-    if (laneId == 0){
-        max_val[warpId] = max_num;
-    }
-    __syncthreads();
-
-    // Now each warp has stored its maximum in `max_val[warpId]`
-    // Perform another reduction across the warps
-    if (tid == 0) {  // Only the first thread in the first warp participates
-        max_num = max_val[0];
-        for (int i = 1; i < block_size / 32; i++) {  // Loop over all warp results
-            max_num = fmaxf(max_num, max_val[i]);
-        }
-        max_val[0] = max_num;  // Store the final block-wide maximum in max_val[0]
-    }
-    __syncthreads();
-
-    // Now max_val[0] contains the maximum value across the block
-    max_num = max_val[0];  // Broadcast the result to all threads in the block
-    
-    float sum = 0.0f;
-    for(int i=tid; i<T; i += block_size){
-        float val = expf(input[i] - max_num);
-        output[i] = val;
-        sum += val;
-    }
-    sum = warpReduceSum(sum);
-
-    if (laneId == 0){
-        sum_val[warpId] = sum;
-    }
-    __syncthreads();
-
-    // Now each warp has stored its sum in `sum_val[warpId]`
-    // Perform another reduction across the warps
-    if (tid == 0) {  // Only the first thread in the first warp participates
-        sum = sum_val[0];
-        for (int i = 1; i < block_size / 32; i++) {  // Loop over all warp results
-            sum += sum_val[i];
-        }
-        sum_val[0] = sum;  // Store the final block-wide maximum in max_val[0]
-    }
-    __syncthreads();
-
-    sum = sum_val[0];
-
-    for (int i = tid; i < T; i += block_size) {
-        output[i] = output[i] / sum;
-    }
-
-}
-
 __global__ void softmax_query_key_kernel3(float *input, float *output, int B, int T, int C, int head_dim, int num_heads, int block_size) {
     int idx = blockIdx.x; // B NH T
     int tid = threadIdx.x; // [0, block_size)
-    int total_threads = B * num_heads * T;
-    if (idx >= total_threads) {
+    if (idx >= B * num_heads * T) {
         return;
     }
     extern __shared__ float shared[];
     float max_val = -INFINITY;
     // thread coarsing.
     for(int i = tid; i < T; i+=block_size){
-        max_val = fmaxf(max_val, input[idx * T + tid]);
+        max_val = fmaxf(max_val, input[idx * T + i]);
     }
     shared[tid] = max_val;
     __syncthreads();
@@ -319,7 +194,7 @@ __global__ void softmax_query_key_kernel3(float *input, float *output, int B, in
     __syncthreads();
     float sum_val = 0;
     for(int i=tid; i < T; i+=block_size){
-        sum_val += input[idx * T + i];
+        sum_val += output[idx * T + i];
     }
     shared[tid] = sum_val;
     __syncthreads();
@@ -330,10 +205,65 @@ __global__ void softmax_query_key_kernel3(float *input, float *output, int B, in
         __syncthreads();
     }
     float sum = shared[0];
-    for(int i=tid; i < T; i++){
+    for(int i=tid; i < T; i+=block_size){
         output[idx * T + i] /= sum;
     }
 
+
+}
+
+void matmul_forward(float* output, float* input, float* weight, int B, int T, int C, int OC){
+    cublasHandle_t handle = createCublasHandle();
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    cublasCheck(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, OC, B*T, C, &alpha, weight, C, input, C, &beta, output, OC));
+    cublasDestroy(handle);
+
+}
+
+__global__ void permute_V(const float* __restrict__ V_in,
+    float* __restrict__ V_out,
+    int B, int T, int NH, int D) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_elements = B * T * NH * D;
+
+    if (idx >= total_elements) return;
+
+    int d = idx % D;
+    int h = (idx / D) % NH;
+    int t = (idx / (D * NH)) % T;
+    int b = idx / (D * NH * T);
+
+    int in_idx  = b * T * NH * D + t * NH * D + h * D + d;
+    int out_idx = b * NH * T * D + h * T * D + t * D + d;
+
+    V_out[out_idx] = V_in[in_idx];
+}
+
+__global__ void permute_kernel(const float* matrix, float* out_matrix,
+    int dim1, int dim2, int dim3, int dim4) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = dim1 * dim2 * dim3 * dim4;
+
+    if (idx >= total) return;
+
+    // Original indices (dim1, dim2, dim3, dim4)
+    int i1 = (idx / (dim2 * dim3 * dim4)) % dim1;
+    int i2 = (idx / (dim3 * dim4)) % dim2;
+    int i3 = (idx / dim4) % dim3;
+    int i4 = idx % dim4;
+
+    // For attention_output: [B, NH, T, D]
+    // Permute to:           [B, T, NH, D]
+    // Map: (b, h, t, d) → (b, t, h, d)
+
+    int permuted_idx = 
+    i1 * (dim3 * dim2 * dim4) +  // B
+    i3 * (dim2 * dim4) +         // T
+    i2 * dim4 +                  // NH
+    i4;                          // D
+
+    out_matrix[permuted_idx] = matrix[idx];
 }
 
 void multi_head_attention_forward_gpu1(
@@ -342,68 +272,14 @@ void multi_head_attention_forward_gpu1(
 ) {
 
     int qkv_size = B * T * C; 
-    int batch_count = B * num_heads;
     float *Q, *K, *V;
     cudaCheck(cudaMalloc(&Q, qkv_size * sizeof(float)));
     cudaCheck(cudaMalloc(&K, qkv_size * sizeof(float)));
     cudaCheck(cudaMalloc(&V, qkv_size * sizeof(float)));
 
-    cublasHandle_t handle = createCublasHandle();
-    cudaCheck(cudaDeviceSynchronize());
-
-    long long int strideA = T * C; // Stride between batches for input
-    long long int strideB = 0;     // Stride for shared weight_q (constant across batches)
-    long long int strideC = T * num_heads * head_dim; // Stride between batches for output
-
-    // GEMM parameters
-    int m = T;               // Number of rows of the output matrix
-    int n = num_heads * head_dim;        // Number of columns of the output matrix
-    int k = C;               // Inner dimension of the matrix multiplication
-    float alpha = 1.0f;
-    float beta = 0.0f;
-
-    // Compute Q (B, T, num_heads * head_dim) = Input (B, T, C) * Wq (C, num_heads * head_dim)
-    cublasCheck(cublasSgemmStridedBatched(
-        handle,
-        CUBLAS_OP_N,
-        CUBLAS_OP_N,
-        n, m, k,                // Dimensions of GEMM
-        &alpha,                 // Alpha
-        weight_q, n, strideB, // Weight matrix C num_heads*head dim
-        input, k, strideA,    // Input matrix B T C
-        &beta,                  // Beta
-        Q, n, strideC,        // Output Q
-        B                       // Batch count
-    ));
-    cudaCheck(cudaDeviceSynchronize());
-
-    // Compute K = input * weight_k
-    cublasCheck(cublasSgemmStridedBatched(
-        handle,
-        CUBLAS_OP_N,
-        CUBLAS_OP_N,
-        n, m, k,                // Dimensions of GEMM
-        &alpha,                 // Alpha
-        weight_k, n, strideB, // Weight matrix C num_heads*head dim
-        input, k, strideA,    // Input matrix B T C
-        &beta,                  // Beta
-        K, n, strideC,        // Output Q
-        B                       // Batch count
-    ));
-
-    // Compute V = input * weight_v
-    cublasCheck(cublasSgemmStridedBatched(
-        handle,
-        CUBLAS_OP_N,
-        CUBLAS_OP_N,
-        n, m, k,                // Dimensions of GEMM
-        &alpha,                 // Alpha
-        weight_v, n, strideB, // Weight matrix C num_heads*head dim
-        input, k, strideA,    // Input matrix B T C
-        &beta,                  // Beta
-        V, n, strideC,        // Output Q
-        B                       // Batch count
-    ));
+    matmul_forward(Q, input, weight_q, B, T, C, num_heads*head_dim);
+    matmul_forward(K, input, weight_k, B, T, C, num_heads*head_dim);
+    matmul_forward(V, input, weight_v, B, T, C, num_heads*head_dim);
 
 
     float* attention_scores;
@@ -415,43 +291,40 @@ void multi_head_attention_forward_gpu1(
     dim3 attention_blocks((total_elements + block_size - 1) / block_size);
     attention_query_key_kernel1<<<attention_blocks, block_size>>>(
         Q, K, attention_scores, B, T, C, head_dim, num_heads);
+
     cudaCheck(cudaDeviceSynchronize());
+    cudaCheck(cudaGetLastError());
     int softmax_shared_memory_size = block_size * sizeof(float);
-    softmax_query_key_kernel3<<<B * T * num_heads, block_size, softmax_shared_memory_size>>>(
+    softmax_query_key_kernel3<<<B * num_heads * T, block_size, softmax_shared_memory_size>>>(
         attention_scores, softmax_output, B, T, C, head_dim, num_heads, block_size);
     cudaCheck(cudaDeviceSynchronize());
+    cudaCheck(cudaGetLastError());
     float* attention_output;
     cudaMalloc(&attention_output, B * num_heads * T * head_dim * sizeof(float));
 
-    // Attention output (B * num_heads, T, head_dim) = softmax(scores) (B * num_heads, T, T) * V (B * num_heads, T, head_dim)
-    cublasCheck(cublasSgemmStridedBatched(
-        handle,
-        CUBLAS_OP_N,               // No transpose for softmax(scores)
-        CUBLAS_OP_N,               // No transpose for V
-        head_dim, T, T,                   // Dimensions of GEMM (head_dim, T, T)
-        &alpha,                    // Alpha
-        V, head_dim, T * head_dim,           // V matrix
-        softmax_output, T, T * T, // Softmax scores matrix
-        &beta,                     // Beta
-        attention_output, head_dim, T * head_dim, // Attention output matrix
-        batch_count                       // Batch count
-    ));
-
+    float* V_reordered;
+    float* attention_output_permuted;
+    cudaCheck(cudaMalloc(&V_reordered, B * num_heads * T * head_dim * sizeof(float)));
+    cudaCheck(cudaMalloc(&attention_output_permuted, B * num_heads * T * head_dim * sizeof(float)));
+    int total = B * T * num_heads * head_dim;
+    int threads = 256;
+    int blocks = (total + threads - 1) / threads;
+    permute_V<<<blocks, threads>>>(V, V_reordered, B, T, num_heads, head_dim);
     cudaCheck(cudaDeviceSynchronize());
-    // Concatenate heads and project back to output space: output (B , T, C)  = attention_output (B * num_heads, T, head_dim) * weight_o (head_dim * num_heads, C)
-    cublasCheck(cublasSgemmStridedBatched(
-        handle,
-        CUBLAS_OP_N,
-        CUBLAS_OP_N,
-        C, T, num_heads * head_dim,                // Dimensions of GEMM
-        &alpha,                 // Alpha
-        weight_o, C, strideB, // Weight matrix V
-        attention_output, num_heads * head_dim, T * num_heads * head_dim,    // Input matrix
-        &beta,                  // Beta
-        output, C, T * C,        // Output V
-        B                       // Batch count
-    ));
+    cudaCheck(cudaGetLastError());
+    
+    // softmax_output (B NH T T) V_reordered (B NH_kv T head_dim)
+    matmul_forward(attention_output, softmax_output, V_reordered, B * num_heads, T, T, head_dim);
+    
+    permute_kernel<<<blocks, threads>>>(
+        attention_output,             // [B, NH, T, D]
+        attention_output_permuted,    // [B, T, NH, D]
+        B, num_heads, T, head_dim
+    );
     cudaCheck(cudaDeviceSynchronize());
+    cudaCheck(cudaGetLastError());
+    // attention_output [B T NH head_dim] weight_o [NH * head_dim C]
+    matmul_forward(output, attention_output_permuted, weight_o, B, T, num_heads * head_dim, C);
 
     cudaFree(Q);
     cudaFree(K);
@@ -460,21 +333,19 @@ void multi_head_attention_forward_gpu1(
     cudaFree(softmax_output);
     cudaFree(attention_output);
 
-    cublasDestroy(handle);
-
 }
 
 int main() {
     srand(0);
 
-    int B = 10;
-    int T = 24;
-    int C = 48;
-    int head_dim = 12;
-    int num_heads = 4;
+    int B = 1;
+    int T = 2048;
+    int C = 768;
+    int head_dim = 64;
+    int num_heads = 12;
     int total_dim = num_heads * head_dim;
-    float eps = 1e-6;
     int deviceIdx = 0;
+    float eps = 1e-6;
 
     cudaCheck(cudaSetDevice(deviceIdx));
 

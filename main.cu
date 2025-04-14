@@ -33,11 +33,11 @@ int main() {
     srand(0);
 
     // Define dimensions
-    int B = 8;               // Smaller batch size
+    int B = 1;               // Smaller batch size
     int T = 1024;            // Shorter context length
-    int C = 2048;            // Smaller hidden size
-    int head_dim = 128;      // Dimension of each attention head
-    int num_heads = 16;      // Number of attention heads (C / head_dim = 2048 / 128 = 16)
+    int C = 786;            // Smaller hidden size
+    int head_dim = 64;      // Dimension of each attention head
+    int num_heads = 12;      // Number of attention heads (C / head_dim = 2048 / 128 = 16)
     int block_size = 256;    // CUDA block size
     int num_blocks = 12;     // Fewer transformer blocks
 

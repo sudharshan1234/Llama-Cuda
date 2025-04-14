@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include<iostream>
-#include "cuda_utils.cuh"
+#include "../include/cuda_utils.cuh"
 
 float* make_random_float(size_t N) {
     float* arr = (float*)malloc(N * sizeof(float));
